@@ -164,15 +164,14 @@ class SoftDecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 class LogisticRegressionDecisionTreeClassifier(BaseEstimator, ClassifierMixin):
 
     def __init__(
-        self, tree_node_classifier=None, soft_tree_node_classifier=None, feature_selection=True, root_weight_fitting=True):
+        self, tree_node_classifier=None, soft_tree_node_classifier=None, feature_selection=True, weight_fitting=True):
         self.tree_node_classifier = tree_node_classifier if tree_node_classifier else TreeNodeClassifier()
         self.soft_tree_node_classifier = soft_tree_node_classifier if soft_tree_node_classifier else SoftTreeNodeClassifier()
         self.tree_node_classifiers = []
         self.soft_tree_node_classifiers = []
         self.classes = None
-        self.root_weight = 0.5
         self.feature_selection = feature_selection
-        self.root_weight_fitting = root_weight_fitting
+        self.weight_fitting = weight_fitting
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None):
@@ -202,11 +201,13 @@ class LogisticRegressionDecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         soft_tree_node_classifier.feature = feature_idx
         self.soft_tree_node_classifiers.append(soft_tree_node_classifier)
         #print(tree_node_classifier.value, tree_node_classifier.impurity)
-        if self.root_weight_fitting and is_root:
-            y_pred = soft_tree_node_classifier.predict(feature)
-            self.root_weight = accuracy_score(
+        y_pred = soft_tree_node_classifier.predict(feature)
+        if self.weight_fitting:
+            soft_tree_node_classifier.value = accuracy_score(
                 y, y_pred, sample_weight=sample_weight)
-            print(self.root_weight)
+        else:
+            soft_tree_node_classifier.value = 0.5
+        print(soft_tree_node_classifier.value)
 
         leaves = tree_node_classifier.apply(X)
         impurity = tree_node_classifier.impurity
@@ -228,10 +229,10 @@ class LogisticRegressionDecisionTreeClassifier(BaseEstimator, ClassifierMixin):
             self._fit(X[is_right], y[is_right], right_sample_weight)
         return self
 
-    def predict_proba(self, X):
-        return self._predict_proba(0, X, True)
+    def predict_proba(self, X, dinamic_weight=False):
+        return self._predict_proba(0, X, True, dinamic_weight)
 
-    def _predict_proba(self, tree_node_idx, X, is_root=False):
+    def _predict_proba(self, tree_node_idx, X, is_root=False, dinamic_weight=False):
         soft_tree_node_classifier = self.soft_tree_node_classifiers[tree_node_idx]
         tree_node_classifier = self.tree_node_classifiers[tree_node_idx]
         feature_idx = soft_tree_node_classifier.feature
@@ -265,18 +266,22 @@ class LogisticRegressionDecisionTreeClassifier(BaseEstimator, ClassifierMixin):
         else:
             child_right_pred_proba = soft_tree_node_pred_proba
         #print(soft_tree_node_pred_proba.shape, child_left_pred_proba.shape, child_right_pred_proba.shape)
-        if is_root:
-            root_weight = self.root_weight
-            return root_weight * soft_tree_node_pred_proba + (1.0 - root_weight) * np.array([
+        if dinamic_weight:
+            weight = np.max(soft_tree_node_pred_proba, axis=1)
+            child_pred_proba = np.array([
                 left_leaves * v for v in child_left_pred_proba.T]).T + np.array([
                     right_leaves * v for v in child_right_pred_proba.T]).T
-        else:
             return np.array([
+                weight * v for v in soft_tree_node_pred_proba.T]).T + np.array([
+                    (1.0 - weight) * v for v in child_pred_proba.T]).T
+        else:
+            weight = soft_tree_node_classifier.value
+            return weight * soft_tree_node_pred_proba + (1.0 - weight) * np.array([
                 left_leaves * v for v in child_left_pred_proba.T]).T + np.array([
                     right_leaves * v for v in child_right_pred_proba.T]).T
 
-    def predict(self, X):
-        return np.argmax(self.predict_proba(X), axis=1)
+    def predict(self, X, dinamic_weight=False):
+        return np.argmax(self.predict_proba(X, dinamic_weight), axis=1)
 
-    def score(self, X, y, sample_weight=None):   
-        return accuracy_score(y, self.predict(X), sample_weight=sample_weight)
+    def score(self, X, y, sample_weight=None, dinamic_weight=False):   
+        return accuracy_score(y, self.predict(X, dinamic_weight), sample_weight=sample_weight)
